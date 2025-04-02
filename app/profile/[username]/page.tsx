@@ -1,13 +1,13 @@
 // app/profile/[username]/page.tsx
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
-import { useParams } from "next/navigation";
+import React, { useState, useEffect, useCallback, useRef } from "react"; // Added useRef
+import { useParams } from "next/navigation"; // Hook to get dynamic route params
 import axios from "axios";
 import Image from "next/image";
-import PostItem from "@/components/PostItem";
-import { IPost } from "@/models/Post";
-import { PopulatedUser, PopulatedComment } from "@/components/PostItem";
+import PostItem from "@/components/PostItem"; // Reuse the PostItem component
+import { IPost } from "@/models/Post"; // Import base types if needed for casting
+import { PopulatedUser, PopulatedComment } from "@/components/PostItem"; // Import types from PostItem
 import { useSession } from "next-auth/react"; // Import useSession
 
 // Define the structure of the post data expected within the profile response
@@ -27,16 +27,14 @@ interface ProfileData {
   profilePicture?: string;
   followersCount: number;
   followingCount: number;
-  createdAt: string;
+  createdAt: string; // Assuming it comes as string from JSON
   posts: ProfilePost[];
-  // We need to know if the *logged-in* user is following this profile
-  // This will be determined client-side for now
 }
 
 export default function ProfilePage() {
-  const params = useParams();
-  const username = params?.username as string;
-  const { data: session } = useSession(); // Get current user session
+  const params = useParams(); // Get route parameters { username: '...' }
+  const username = params?.username as string; // Extract username, assert as string
+  const { data: session, update: updateSession } = useSession(); // Get session and update function
   const currentUserId = session?.user?.id;
 
   const [profile, setProfile] = useState<ProfileData | null>(null);
@@ -46,16 +44,12 @@ export default function ProfilePage() {
   // State for follow button
   const [isFollowing, setIsFollowing] = useState(false);
   const [isFollowLoading, setIsFollowLoading] = useState(false);
-  // State to track follower count changes locally
   const [localFollowersCount, setLocalFollowersCount] = useState(0);
 
-  // Function to check initial follow status (client-side)
-  // This requires fetching the *current user's* data, which might be inefficient.
-  // A better approach long-term might be to include 'isFollowing' in the profile API response
-  // if the request is authenticated. For now, we'll do a basic check if needed,
-  // but rely more on the button action itself.
-  // Let's skip the initial check for now and determine status based on button clicks
-  // and potentially add it later if needed.
+  // State for avatar upload
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null); // Ref for hidden file input
 
   const fetchProfile = useCallback(async () => {
     if (!username) {
@@ -66,18 +60,18 @@ export default function ProfilePage() {
 
     setIsLoading(true);
     setError(null);
-    setProfile(null);
+    setProfile(null); // Clear previous profile data
 
     try {
       const response = await axios.get(`/api/users/${username}`);
       if (response.data.success) {
-        setProfile(response.data.data);
-        setLocalFollowersCount(response.data.data.followersCount); // Initialize local count
+        const fetchedProfile = response.data.data as ProfileData;
+        setProfile(fetchedProfile);
+        setLocalFollowersCount(fetchedProfile.followersCount); // Initialize local count
 
-        // TODO: Implement check if current user is following this profile
-        // This would ideally come from the API or require another fetch
-        // For now, we assume 'false' initially if not the user's own profile
-        setIsFollowing(false); // Placeholder - needs proper check
+        // Placeholder for checking follow status - ideally API driven
+        // For now, assume false unless it's the user's own profile
+        setIsFollowing(false);
       } else {
         setError(response.data.message || "Failed to load profile.");
       }
@@ -106,19 +100,16 @@ export default function ProfilePage() {
 
     setIsFollowLoading(true);
 
-    // --- Optimistic UI Update ---
+    // Optimistic UI Update
     const previousIsFollowing = isFollowing;
     const previousFollowersCount = localFollowersCount;
-
     setIsFollowing(!isFollowing);
     setLocalFollowersCount((prevCount) =>
       isFollowing ? prevCount - 1 : prevCount + 1
     );
-    // --- End Optimistic Update ---
 
     try {
       const response = await axios.post(`/api/users/${profile.username}/follow`);
-
       if (!response.data.success) {
         // Revert optimistic update on API failure
         console.error("Failed to follow/unfollow:", response.data.message);
@@ -127,8 +118,6 @@ export default function ProfilePage() {
       } else {
         console.log("Follow status updated successfully");
         // API call was successful, optimistic state is correct
-        // Optionally, refetch profile to get exact counts, but optimistic is usually fine
-        // fetchProfile(); // Uncomment to refetch for absolute accuracy
       }
     } catch (error) {
       console.error("Error calling follow API:", error);
@@ -140,18 +129,83 @@ export default function ProfilePage() {
     }
   };
 
+  // --- Avatar Upload Handlers ---
+  const handleAvatarClick = () => {
+    // Trigger hidden file input only on own profile
+    if (isOwnProfile) {
+      fileInputRef.current?.click();
+    }
+  };
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !profile) return;
+
+    // Reset errors and set loading state
+    setUploadError(null);
+    setIsUploadingAvatar(true);
+
+    const formData = new FormData();
+    formData.append("avatar", file); // Key must match backend ('avatar')
+
+    try {
+      const response = await axios.post("/api/users/update-avatar", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data", // Important for file uploads
+        },
+      });
+
+      if (response.data.success) {
+        const newAvatarUrl = response.data.data.profilePictureUrl;
+        console.log("New avatar URL:", newAvatarUrl);
+
+        // Update profile state locally
+        setProfile((prevProfile) =>
+          prevProfile
+            ? { ...prevProfile, profilePicture: newAvatarUrl }
+            : null
+        );
+
+        // IMPORTANT: Update the session so the header avatar updates too
+        await updateSession({
+            ...session,
+            user: {
+                ...session?.user,
+                image: newAvatarUrl, // Update the 'image' field in the session user
+            },
+        });
+
+        console.log("Avatar updated successfully!");
+        // Optionally clear the file input value
+        if (fileInputRef.current) {
+            fileInputRef.current.value = "";
+        }
+
+      } else {
+        setUploadError(response.data.message || "Failed to upload avatar.");
+      }
+    } catch (err: any) {
+      console.error("Error uploading avatar:", err);
+      setUploadError(
+        err.response?.data?.message || "An error occurred during upload."
+      );
+    } finally {
+      setIsUploadingAvatar(false);
+    }
+  };
+
   // --- Render Logic ---
+
   if (isLoading) {
-    // ... loading state ...
     return (
       <div className="flex min-h-screen items-center justify-center p-4 pt-20">
         <p className="text-lg text-gray-600">Loading profile...</p>
       </div>
     );
   }
+
   if (error) {
-    // ... error state ...
-     return (
+    return (
       <div className="flex min-h-screen items-center justify-center p-4 pt-20">
         <div className="rounded border border-red-200 bg-red-50 p-6 text-center text-red-700">
           <p className="font-semibold">Error</p>
@@ -160,15 +214,17 @@ export default function ProfilePage() {
       </div>
     );
   }
+
   if (!profile) {
-    // ... no profile state ...
-     return (
+    // Should be covered by error state, but as a fallback
+    return (
       <div className="flex min-h-screen items-center justify-center p-4 pt-20">
         <p className="text-lg text-gray-600">Profile data unavailable.</p>
       </div>
     );
   }
 
+  // --- Profile Display ---
   const profilePic = profile.profilePicture ?? "/default-avatar.png";
   const memberSince = profile.createdAt
     ? new Date(profile.createdAt).toLocaleDateString("en-US", {
@@ -181,35 +237,65 @@ export default function ProfilePage() {
   const isOwnProfile = currentUserId === profile._id;
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 pt-20">
+    <div className="min-h-screen bg-gray-50 p-4 pt-20"> {/* Adjust pt for header */}
       <div className="mx-auto max-w-3xl">
         {/* Profile Header */}
         <div className="mb-8 rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col items-center sm:flex-row sm:items-start sm:space-x-6">
-            {/* Avatar */}
-            <Image
-              src={profilePic}
-              alt={`${profile.username}'s avatar`}
-              width={128}
-              height={128}
-              className="h-32 w-32 flex-shrink-0 rounded-full object-cover ring-4 ring-white"
-              unoptimized
-            />
+            {/* --- Avatar (Clickable on own profile) --- */}
+            <div className="relative flex-shrink-0">
+              <Image
+                src={profilePic}
+                alt={`${profile.username}'s avatar`}
+                width={128} // Larger size for profile
+                height={128}
+                className={`h-32 w-32 rounded-full object-cover ring-4 ring-white ${
+                  isOwnProfile ? "cursor-pointer hover:opacity-80" : ""
+                } ${isUploadingAvatar ? "opacity-50" : ""}`} // Style changes for upload
+                unoptimized
+                onClick={handleAvatarClick} // Click handler added
+                priority // Prioritize loading profile pic
+              />
+              {/* Loading/Spinner Overlay */}
+              {isUploadingAvatar && (
+                <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black bg-opacity-50">
+                  {/* Replace with a proper spinner component if desired */}
+                  <div className="h-8 w-8 animate-spin rounded-full border-4 border-t-transparent border-white"></div>
+                </div>
+              )}
+              {/* Hidden File Input */}
+              {isOwnProfile && (
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileChange}
+                  accept="image/png, image/jpeg, image/gif, image/webp" // Accept common image types
+                  className="hidden"
+                  disabled={isUploadingAvatar}
+                />
+              )}
+            </div>
+
             {/* Profile Info */}
             <div className="mt-4 flex flex-grow flex-col items-center text-center sm:mt-0 sm:items-start sm:text-left">
-              <div className="flex w-full items-center justify-between"> {/* Container for name and button */}
-                <div>
+              <div className="flex w-full items-start justify-between sm:items-center"> {/* Adjusted alignment */}
+                {/* Name and Username */}
+                <div className="flex-grow"> {/* Allow text to take space */}
                     <h1 className="text-2xl font-bold text-gray-900">
                         {profile.name || profile.username}
                     </h1>
                     <p className="text-md text-gray-500">@{profile.username}</p>
                 </div>
-                {/* --- Follow/Edit Button --- */}
+                {/* Follow/Edit Button */}
                 {currentUserId && ( // Only show button if logged in
-                    <div className="mt-2 sm:mt-0">
+                    <div className="ml-4 mt-2 flex-shrink-0 sm:mt-0"> {/* Added margin-left */}
                     {isOwnProfile ? (
-                        <button className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
-                        Edit Profile
+                        <button
+                            onClick={handleAvatarClick} // Can also trigger from here
+                            disabled={isUploadingAvatar}
+                            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70"
+                        >
+                        {isUploadingAvatar ? "Uploading..." : "Change Avatar"}
                         </button>
                     ) : (
                         <button
@@ -232,9 +318,15 @@ export default function ProfilePage() {
                 )}
               </div>
 
+              {/* Upload Error Message */}
+              {uploadError && isOwnProfile && (
+                <p className="mt-2 w-full rounded border border-red-300 bg-red-50 p-2 text-xs text-red-700">
+                  {uploadError}
+                </p>
+              )}
 
               {/* Follow Stats */}
-              <div className="mt-3 flex space-x-4 text-sm text-gray-600">
+              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-600"> {/* Added flex-wrap and gap */}
                 <span>
                   <span className="font-semibold text-gray-900">
                     {profile.posts?.length ?? 0}
@@ -269,11 +361,11 @@ export default function ProfilePage() {
         </div>
 
         {/* User's Posts Feed */}
-        {/* ... (keep existing posts feed section) ... */}
          <h2 className="mb-4 text-xl font-semibold text-gray-800">Posts</h2>
         <div className="space-y-4">
           {profile.posts && profile.posts.length > 0 ? (
             profile.posts.map((post) => (
+              // Cast the post structure if needed, though ProfilePost should align
               <PostItem key={post._id} post={post as any} />
             ))
           ) : (
