@@ -2,10 +2,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import dbConnect from "@/lib/dbConnect";
-import Post, { IPost } from "@/models/Post";
-import User from "@/models/User"; // Import User model for population
+import Post, { IPost, IComment } from "@/models/Post"; // Import IComment
+import User, { IUser } from "@/models/User"; // Import IUser
 
 const secret = process.env.NEXTAUTH_SECRET;
+
+// Define types for populated fields for clarity
+type PopulatedPostAuthor = Pick<IUser, "username" | "profilePicture">;
+type PopulatedCommentUser = Pick<IUser, "username" | "profilePicture">;
 
 // --- GET Handler: Fetch Posts ---
 export async function GET(request: NextRequest) {
@@ -18,16 +22,23 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(url.searchParams.get("limit") || "10");
     const skip = (page - 1) * limit;
 
-    // Fetch posts, sorted by newest first, populate author
+    // Fetch posts, sorted by newest first
+    // Populate 'author' and nested 'comments.user'
     const posts = await Post.find({})
-      .populate<{ author: Pick<IPost["author"], "username" | "profilePicture"> }>(
-        "author",
-        "username profilePicture"
+      .populate<{ author: PopulatedPostAuthor }>(
+        "author", // Field to populate
+        "username profilePicture" // Select specific fields from the User model
       )
-      .sort({ createdAt: -1 })
+      // Populate the 'user' field within the 'comments' array
+      .populate<{ comments: (IComment & { user: PopulatedCommentUser })[] }>({
+        path: "comments.user", // Path to the nested field to populate
+        select: "username profilePicture", // Fields to select from the referenced User
+        model: User, // Explicitly specify the model to use for population
+      })
+      .sort({ createdAt: -1 }) // Sort by creation date, descending
       .skip(skip)
       .limit(limit)
-      .lean();
+      .lean(); // Use .lean() for faster read-only operations
 
     const totalPosts = await Post.countDocuments();
 
@@ -53,8 +64,9 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// --- POST Handler: Create Post (Cleaned Logs) ---
+// --- POST Handler: Create Post (Keep as is) ---
 export async function POST(request: NextRequest) {
+  // ... existing POST handler code ...
   await dbConnect();
 
   // 1. Check Authentication
