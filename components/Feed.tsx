@@ -5,12 +5,12 @@ import React, { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import PostItem from "./PostItem";
 import { IPost } from "@/models/Post";
-// Removed useSocket import
-// import { useSocket } from "@/context/SocketContext";
+import { useSocket } from "@/context/SocketContext"; // Import useSocket
 import { PopulatedUser, PopulatedComment } from "./PostItem"; // Import types
 
 // Define the shape of the post data expected from the API/Socket
-type PopulatedPost = Omit<IPost, "author" | "likes" | "comments"> & {
+// Export this type if CreatePostForm needs it
+export type PopulatedPost = Omit<IPost, "author" | "likes" | "comments"> & {
   _id: string;
   author: PopulatedUser;
   likes: string[];
@@ -25,8 +25,7 @@ const Feed: React.FC = () => {
   const [hasMore, setHasMore] = useState(true);
   const limit = 10;
 
-  // Removed useSocket hook call
-  // const { socket, isConnected } = useSocket();
+  const { socket, isConnected } = useSocket(); // Get socket instance and connection status
 
   // Function to fetch posts
   const fetchPosts = useCallback(
@@ -72,11 +71,37 @@ const Feed: React.FC = () => {
     fetchPosts(1);
   }, [fetchPosts]);
 
-  // --- Socket Event Listener REMOVED ---
-  // useEffect(() => {
-  //   // ... listener logic removed ...
-  // }, [socket, isConnected]);
-  // --- End Removal ---
+  // --- Socket Event Listener for New Posts ---
+  useEffect(() => {
+    if (!socket || !isConnected) {
+      // console.log("Feed: Socket not connected, listener not attached.");
+      return; // Don't attach listener if socket is not ready
+    }
+
+    const handleNewPost = (newPost: PopulatedPost) => {
+      // Log that the handler was called
+      console.log("Feed: handleNewPost function CALLED with data:", newPost?._id);
+      setPosts((prevPosts) => {
+        // Check if post already exists in state
+        if (prevPosts.some((post) => post._id === newPost._id)) {
+          // console.log(`Feed: Post ${newPost._id} already exists, skipping.`);
+          return prevPosts; // Already exists, do nothing
+        }
+        // Add the new post to the beginning of the array
+        console.log(`Feed: Adding new post ${newPost._id} to state.`);
+        return [newPost, ...prevPosts];
+      });
+    };
+
+    console.log("Feed: Attaching 'post_created' listener");
+    socket.on("post_created", handleNewPost);
+
+    // Cleanup listener on component unmount or socket change
+    return () => {
+      console.log("Feed: Detaching 'post_created' listener");
+      socket.off("post_created", handleNewPost);
+    };
+  }, [socket, isConnected]); // Re-run effect if socket instance or connection status changes
 
   // Function to handle loading more posts
   const loadMorePosts = () => {

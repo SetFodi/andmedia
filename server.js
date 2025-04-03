@@ -27,9 +27,8 @@ function initializeSocketIO(httpServer) {
       socket.emit("helloFromServer", `Server received your message: ${msg}`);
     });
 
-    // --- ADDED LISTENER FOR CLIENT LIKE EMIT ---
+    // Listener for like updates from client
     socket.on("like_updated_from_client", (data) => {
-      // data should be { postId: string, likes: string[] }
       if (data && data.postId && Array.isArray(data.likes)) {
           console.log(`Server received 'like_updated_from_client' for post ${data.postId} from ${socket.id}`);
           // Broadcast 'like_updated' to all *other* connected clients
@@ -37,6 +36,18 @@ function initializeSocketIO(httpServer) {
       } else {
           console.warn(`Server received invalid 'like_updated_from_client' data from ${socket.id}:`, data);
       }
+    });
+
+    // --- ADDED LISTENER FOR NEW POSTS FROM CLIENT ---
+    socket.on("new_post_from_client", (postData) => {
+        // Basic validation of received data
+        if (postData && postData._id && postData.author) {
+            console.log(`Server received 'new_post_from_client' (ID: ${postData._id}) from ${socket.id}`);
+            // Broadcast 'post_created' to all *other* connected clients
+            socket.broadcast.emit("post_created", postData);
+        } else {
+            console.warn(`Server received invalid 'new_post_from_client' data from ${socket.id}:`, postData);
+        }
     });
     // --- END ADDED LISTENER ---
 

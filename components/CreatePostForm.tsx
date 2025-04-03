@@ -5,6 +5,10 @@ import React, { useState } from "react";
 import axios from "axios";
 import { useSession } from "next-auth/react";
 import Image from "next/image";
+import { useSocket } from "@/context/SocketContext"; // Import useSocket
+// Import the type for a populated post, assuming it's defined/exported in Feed or elsewhere
+// If not, define it here or import from the correct location
+import { PopulatedPost } from "./Feed";
 
 interface CreatePostFormProps {
   onPostCreated: () => void; // Callback to notify parent (e.g., Feed) to refresh
@@ -12,6 +16,7 @@ interface CreatePostFormProps {
 
 const CreatePostForm: React.FC<CreatePostFormProps> = ({ onPostCreated }) => {
   const { data: session } = useSession();
+  const { socket, isConnected } = useSocket(); // Get socket instance and connection status
   const [content, setContent] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,11 +30,25 @@ const CreatePostForm: React.FC<CreatePostFormProps> = ({ onPostCreated }) => {
     setError(null);
 
     try {
+      // Call API to create the post
       const response = await axios.post("/api/posts", { content });
 
       if (response.data.success) {
+        const newPostData = response.data.data as PopulatedPost; // Get the created post data
+
         setContent(""); // Clear the textarea
-        onPostCreated(); // Trigger refresh in parent component
+        onPostCreated(); // Trigger refresh for the user who posted (via HomePage key update)
+
+        // --- Emit event for other clients via server ---
+        if (socket && isConnected) {
+          console.log("CreatePostForm: Emitting 'new_post_from_client'", newPostData);
+          // Use a distinct event name for client -> server
+          socket.emit("new_post_from_client", newPostData);
+        } else {
+          console.warn("CreatePostForm: Socket not available or connected, cannot emit new post event.");
+        }
+        // --- End Emit ---
+
       } else {
         setError(response.data.message || "Failed to create post.");
       }
@@ -58,7 +77,7 @@ const CreatePostForm: React.FC<CreatePostFormProps> = ({ onPostCreated }) => {
             alt="Your avatar"
             width={40}
             height={40}
-            className="h-10 w-10 rounded-full object-cover" // Fixed size
+            className="h-10 w-10 flex-shrink-0 rounded-full object-cover" // Added flex-shrink-0
             unoptimized
           />
           {/* Textarea */}
