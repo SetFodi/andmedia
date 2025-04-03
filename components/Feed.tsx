@@ -17,7 +17,13 @@ export type PopulatedPost = Omit<IPost, "author" | "likes" | "comments"> & {
   comments: PopulatedComment[];
 };
 
-const Feed: React.FC = () => {
+// --- Add refreshFeed prop interface ---
+interface FeedProps {
+    refreshFeed: () => void; // Function to trigger a refresh in HomePage
+}
+// --- End Add ---
+
+const Feed: React.FC<FeedProps> = ({ refreshFeed }) => { // Destructure refreshFeed prop
   const [posts, setPosts] = useState<PopulatedPost[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,39 +75,55 @@ const Feed: React.FC = () => {
   // Initial fetch on component mount
   useEffect(() => {
     fetchPosts(1);
-  }, [fetchPosts]);
+  }, [fetchPosts]); // Note: fetchPosts depends on limit, which is stable.
 
-  // --- Socket Event Listener for New Posts ---
+  // --- Socket Listeners ---
   useEffect(() => {
     if (!socket || !isConnected) {
-      // console.log("Feed: Socket not connected, listener not attached.");
+      // console.log("Feed: Socket not connected, listeners not attached.");
       return; // Don't attach listener if socket is not ready
     }
 
+    // Listener for New Posts
     const handleNewPost = (newPost: PopulatedPost) => {
-      // Log that the handler was called
       console.log("Feed: handleNewPost function CALLED with data:", newPost?._id);
       setPosts((prevPosts) => {
-        // Check if post already exists in state
         if (prevPosts.some((post) => post._id === newPost._id)) {
-          // console.log(`Feed: Post ${newPost._id} already exists, skipping.`);
-          return prevPosts; // Already exists, do nothing
+          return prevPosts;
         }
-        // Add the new post to the beginning of the array
         console.log(`Feed: Adding new post ${newPost._id} to state.`);
         return [newPost, ...prevPosts];
       });
     };
 
+    // --- Listener for Deleted Posts ---
+    const handlePostDeleted = (data: { postId: string }) => {
+        if (data && data.postId) {
+            console.log(`Feed: Received 'post_deleted' event for ID: ${data.postId}`);
+            // Remove the post from the state by filtering
+            setPosts((prevPosts) => prevPosts.filter(post => {
+                // console.log(`Filtering: Comparing post._id (${post._id}) with data.postId (${data.postId})`);
+                return post._id !== data.postId;
+            }));
+        } else {
+            console.warn("Feed: Received invalid 'post_deleted' data:", data);
+        }
+    };
+    // --- End Listener for Deleted Posts ---
+
     console.log("Feed: Attaching 'post_created' listener");
     socket.on("post_created", handleNewPost);
+    console.log("Feed: Attaching 'post_deleted' listener"); // Log attachment
+    socket.on("post_deleted", handlePostDeleted); // Attach listener
 
-    // Cleanup listener on component unmount or socket change
+    // Cleanup listeners
     return () => {
       console.log("Feed: Detaching 'post_created' listener");
       socket.off("post_created", handleNewPost);
+      console.log("Feed: Detaching 'post_deleted' listener"); // Log detachment
+      socket.off("post_deleted", handlePostDeleted); // Detach listener
     };
-  }, [socket, isConnected]); // Re-run effect if socket instance or connection status changes
+  }, [socket, isConnected]); // Dependencies
 
   // Function to handle loading more posts
   const loadMorePosts = () => {
@@ -138,7 +160,11 @@ const Feed: React.FC = () => {
     <div className="mt-6 w-full max-w-2xl">
       {/* List of Posts */}
       {posts.map((post) =>
-        post._id ? <PostItem key={post._id} post={post} /> : null
+        post._id ? (
+            // --- Pass refreshFeed down to PostItem as onPostDeleted ---
+            <PostItem key={post._id} post={post} onPostDeleted={refreshFeed} />
+            // --- End Pass ---
+        ) : null
       )}
 
       {/* Error message during load more */}

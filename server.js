@@ -61,6 +61,16 @@ function initializeSocketIO(httpServer) {
             console.warn(`Server received invalid 'new_comment_from_client' data from ${socket.id}:`, commentData);
         }
     });
+    socket.on("delete_post_from_client", (data) => {
+      // data should be { postId: string }
+      if (data && data.postId) {
+          console.log(`Server received 'delete_post_from_client' for post ${data.postId} from ${socket.id}`);
+          // Broadcast 'post_deleted' to all *other* connected clients
+          socket.broadcast.emit("post_deleted", { postId: data.postId });
+      } else {
+          console.warn(`Server received invalid 'delete_post_from_client' data from ${socket.id}:`, data);
+      }
+  });
     // --- END ADDED LISTENER ---
 
     socket.on("disconnect", (reason) => {

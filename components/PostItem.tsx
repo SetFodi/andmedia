@@ -24,7 +24,7 @@ export type PopulatedComment = Omit<IComment, "user"> & {
   user: PopulatedUser;
 };
 
-// Define the props for PostItem, ensuring author and comments.user are populated
+// --- Add onPostDeleted prop ---
 interface PostItemProps {
   post: Omit<IPost, "author" | "likes" | "comments"> & {
     _id: string;
@@ -32,7 +32,9 @@ interface PostItemProps {
     likes: string[]; // Expecting likes as an array of user IDs (strings) initially
     comments: PopulatedComment[];
   };
+  onPostDeleted: () => void; // Callback function when post is deleted by current user
 }
+// --- End Add ---
 
 // --- Single Comment Component (Complete - No changes needed) ---
 const CommentItem: React.FC<{ comment: PopulatedComment }> = ({ comment }) => {
@@ -71,26 +73,30 @@ const CommentItem: React.FC<{ comment: PopulatedComment }> = ({ comment }) => {
   );
 };
 
-// --- Main Post Item Component (Complete - Added Comment Socket Logic) ---
-const PostItem: React.FC<PostItemProps> = ({ post }) => {
+// --- Main Post Item Component (Complete - Added Delete Logic) ---
+const PostItem: React.FC<PostItemProps> = ({ post, onPostDeleted }) => { // Destructure onPostDeleted prop
   const { data: session } = useSession();
   const currentUserId = session?.user?.id;
   const { socket, isConnected } = useSocket(); // Get socket
 
-  // Like State
+  // --- State ---
   const [isLiked, setIsLiked] = useState(() =>
     currentUserId ? post.likes.includes(currentUserId) : false
   );
   const [likeCount, setLikeCount] = useState(post.likes?.length ?? 0);
   const [isLoadingLike, setIsLoadingLike] = useState(false);
-
-  // Comment State
   const [comments, setComments] = useState<PopulatedComment[]>(post.comments ?? []);
   const [commentText, setCommentText] = useState("");
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
   const [commentError, setCommentError] = useState<string | null>(null);
   const [showComments, setShowComments] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false); // State for delete loading
+  // Removed deleteError state, using alert for simplicity
 
+  // Determine if the current user is the author
+  const isAuthor = post.author?._id === currentUserId;
+
+  // --- Effects ---
   // Effect to update like state based on props
   useEffect(() => {
     setLikeCount(post.likes?.length ?? 0);
@@ -102,7 +108,7 @@ const PostItem: React.FC<PostItemProps> = ({ post }) => {
     setComments(post.comments ?? []);
   }, [post.comments]);
 
-  // --- Socket Listener for Like Updates ---
+  // Socket Listener for Like Updates
   useEffect(() => {
     if (!socket || !isConnected) return;
     const handleLikeUpdate = (data: { postId: string; likes: string[] }) => {
@@ -120,47 +126,31 @@ const PostItem: React.FC<PostItemProps> = ({ post }) => {
     };
   }, [socket, isConnected, post._id, currentUserId]);
 
-  // --- Socket Listener for Comment Updates ---
-  useEffect(() => {
+  // Socket Listener for Comment Updates
+   useEffect(() => {
     if (!socket || !isConnected) return;
-
-    // Handler for when a new comment is broadcast
     const handleCommentAdded = (data: { postId: string; comment: PopulatedComment }) => {
-        // Check if the comment belongs to this post
         if (data.postId === post._id) {
             console.log(`PostItem (${post._id}): Received broadcast 'comment_added'`, data.comment);
-            // Add the new comment to the beginning of the local state
-            // Avoid adding duplicates if the user's own submission overlaps
             setComments((prevComments) => {
-                if (prevComments.some(c => c._id === data.comment._id)) {
-                    return prevComments;
-                }
+                if (prevComments.some(c => c._id === data.comment._id)) return prevComments;
                 return [data.comment, ...prevComments];
             });
-            // Optionally ensure comments are shown when a new one arrives
             setShowComments(true);
         }
     };
-
     console.log(`PostItem (${post._id}): Attaching 'comment_added' listener`);
     socket.on("comment_added", handleCommentAdded);
-
-    // Cleanup listener
     return () => {
         console.log(`PostItem (${post._id}): Detaching 'comment_added' listener`);
         socket.off("comment_added", handleCommentAdded);
     };
-  }, [socket, isConnected, post._id]); // Dependencies: socket, connection status, post ID
+  }, [socket, isConnected, post._id]);
 
-
-  // Author/Time details
-  const authorUsername = post.author?.username ?? "Unknown User";
-  const authorProfilePic = post.author?.profilePicture ?? "/default-avatar.png";
-  const timeAgo = post.createdAt ? formatDistanceToNow(new Date(post.createdAt), { addSuffix: true }) : "Timestamp unavailable";
-
-  // --- Like Handler (Emits event from client on success) ---
+  // --- Handlers ---
+  // Like Handler
   const handleLikeClick = async () => {
-    if (!currentUserId || isLoadingLike) { /* ... */ return; }
+    if (!currentUserId || isLoadingLike) { return; }
     setIsLoadingLike(true);
     try {
       const response = await axios.patch(`/api/posts/${post._id}/like`);
@@ -172,13 +162,13 @@ const PostItem: React.FC<PostItemProps> = ({ post }) => {
         if (socket && isConnected) {
             console.log(`PostItem (${post._id}): Emitting 'like_updated_from_client'`, payload);
             socket.emit("like_updated_from_client", payload);
-        } else { /* ... warning ... */ }
-      } else { /* ... error handling ... */ }
-    } catch (error) { /* ... error handling ... */ }
+        } else { console.warn(`PostItem (${post._id}): Socket not available or connected, cannot emit like update.`); }
+      } else { console.error("Failed to update like status via API:", response.data.message); }
+    } catch (error) { console.error("Error calling like API:", error); }
     finally { setIsLoadingLike(false); }
   };
 
-  // --- Comment Submit Handler (Emits event from client on success) ---
+  // Comment Submit Handler
   const handleCommentSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!commentText.trim() || isSubmittingComment || !currentUserId) {
@@ -188,43 +178,99 @@ const PostItem: React.FC<PostItemProps> = ({ post }) => {
     setIsSubmittingComment(true);
     setCommentError(null);
     try {
-      const response = await axios.post(`/api/posts/${post._id}/comments`, {
-        text: commentText.trim(),
-      });
+      const response = await axios.post(`/api/posts/${post._id}/comments`, { text: commentText.trim() });
       if (response.data.success) {
         const newComment = response.data.data as PopulatedComment;
-
-        // Update local state immediately for the user who submitted
         setComments((prevComments) => [newComment, ...prevComments]);
         setCommentText("");
         setShowComments(true);
-
-        // --- Emit event for other clients via server ---
         const payload = { postId: post._id, comment: newComment };
         if (socket && isConnected) {
             console.log(`PostItem (${post._id}): Emitting 'new_comment_from_client'`, payload);
             socket.emit("new_comment_from_client", payload);
-        } else {
-            console.warn(`PostItem (${post._id}): Socket not available or connected, cannot emit new comment event.`);
-        }
-        // --- End Emit ---
-
-      } else {
-        setCommentError(response.data.message || "Failed to add comment.");
-      }
+        } else { console.warn(`PostItem (${post._id}): Socket not available or connected, cannot emit new comment event.`); }
+      } else { setCommentError(response.data.message || "Failed to add comment."); }
     } catch (err: any) {
       console.error("Error submitting comment:", err);
-      setCommentError(
-        err.response?.data?.message || "An error occurred while commenting."
-      );
-    } finally {
-      setIsSubmittingComment(false);
-    }
+      setCommentError(err.response?.data?.message || "An error occurred while commenting.");
+    } finally { setIsSubmittingComment(false); }
   };
 
+  // --- Delete Handler (Calls onPostDeleted) ---
+  const handleDeleteClick = async () => {
+    if (!isAuthor || isDeleting) return;
+
+    if (!window.confirm("Are you sure you want to delete this post? This cannot be undone.")) {
+      return;
+    }
+
+    setIsDeleting(true);
+
+    try {
+      const response = await axios.delete(`/api/posts/${post._id}`);
+
+      if (response.data.success) {
+        console.log(`PostItem (${post._id}): Post deleted via API successfully.`);
+
+        // Emit event for other clients via server
+        if (socket && isConnected) {
+          const payload = { postId: post._id };
+          console.log(`PostItem (${post._id}): Emitting 'delete_post_from_client'`, payload);
+          socket.emit("delete_post_from_client", payload);
+        } else {
+          console.warn(`PostItem (${post._id}): Socket not available, cannot emit delete event.`);
+        }
+
+        // --- Call the callback to trigger Feed refresh for the deleting user ---
+        onPostDeleted();
+        // --- End Callback ---
+
+        // No need to set isDeleting false here, component should unmount via parent refresh
+      } else {
+        console.error("Failed to delete post via API:", response.data.message);
+        alert(`Error: ${response.data.message || "Failed to delete post."}`);
+        setIsDeleting(false); // Reset on API failure
+      }
+    } catch (error: any) {
+      console.error(`Error deleting post ${post._id}:`, error);
+      alert(`Error: ${error.response?.data?.message || "Could not delete post."}`);
+      setIsDeleting(false); // Reset on network/server error
+    }
+    // Removed finally block as we only reset isDeleting on error now
+  };
+
+
   // --- Render Logic (Complete) ---
+  const authorUsername = post.author?.username ?? "Unknown User";
+  const authorProfilePic = post.author?.profilePicture ?? "/default-avatar.png";
+  const timeAgo = post.createdAt ? formatDistanceToNow(new Date(post.createdAt), { addSuffix: true }) : "Timestamp unavailable";
+
   return (
-    <div className="mb-4 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm transition-shadow duration-200 ease-in-out hover:shadow-md">
+    <div className="relative mb-4 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm transition-shadow duration-200 ease-in-out hover:shadow-md">
+      {/* Delete Button */}
+      {isAuthor && (
+        <div className="absolute right-2 top-2 z-10">
+          <button
+            onClick={handleDeleteClick}
+            disabled={isDeleting}
+            className="rounded-full bg-white bg-opacity-80 p-1 text-gray-500 hover:bg-red-100 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label="Delete post"
+          >
+            {isDeleting ? (
+              <svg className="h-4 w-4 animate-spin text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-4 w-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+              </svg>
+            )}
+          </button>
+        </div>
+      )}
+      {/* Removed deleteError display */}
+
       {/* Post Header */}
       <div className="flex items-center space-x-3 p-4">
         <Image src={authorProfilePic} alt={`${authorUsername}'s avatar`} width={40} height={40} className="h-10 w-10 flex-shrink-0 rounded-full object-cover" unoptimized />
@@ -268,7 +314,6 @@ const PostItem: React.FC<PostItemProps> = ({ post }) => {
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5" >
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.76c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.076-4.076a1.526 1.526 0 011.037-.443 48.282 48.282 0 005.68-.494c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
           </svg>
-          {/* Update comment count based on state */}
           <span className="text-sm font-medium">{comments.length}</span>
         </button>
       </div>

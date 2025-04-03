@@ -3,17 +3,17 @@
 
 import { useSession, signOut } from "next-auth/react";
 import Link from "next/link";
-import { useState, useCallback } from "react"; // Import useState and useCallback
+import { useState, useCallback } from "react";
 import CreatePostForm from "@/components/CreatePostForm";
-import Feed from "@/components/Feed"; // Import the Feed component
+import Feed from "@/components/Feed";
 
 export default function HomePage() {
   const { data: session, status } = useSession();
-  // State to trigger feed refresh. Incrementing it forces Feed to re-run useEffect.
   const [feedKey, setFeedKey] = useState(0);
 
   // Callback to trigger feed refresh by updating the key
   const refreshFeed = useCallback(() => {
+    console.log("HomePage: Refreshing feed..."); // Add log
     setFeedKey((prevKey) => prevKey + 1);
   }, []);
 
@@ -56,38 +56,30 @@ export default function HomePage() {
 
       {/* Main Content Area */}
       <main className="mt-16 w-full max-w-2xl">
-        {" "}
-        {/* Add margin-top to account for fixed header */}
         {status === "authenticated" && session?.user ? (
           // --- User is Logged In ---
           <div>
-            {/* Pass the refreshFeed callback to the form */}
             <CreatePostForm onPostCreated={refreshFeed} />
 
-            {/* Pass the feedKey to Feed component to trigger re-fetch on change */}
-            {/* Also pass refreshFeed if Feed needs to trigger its own refresh */}
-            <Feed key={feedKey} />
+            {/* --- Pass refreshFeed to Feed --- */}
+            <Feed key={feedKey} refreshFeed={refreshFeed} />
+            {/* --- End Pass --- */}
           </div>
         ) : (
           // --- User is Not Logged In ---
           <div className="mt-20 rounded-lg bg-white p-8 text-center shadow-md">
-            <h1 className="mb-4 text-3xl font-bold text-indigo-600">
+            {/* ... Login/Register prompts ... */}
+             <h1 className="mb-4 text-3xl font-bold text-indigo-600">
               Welcome to Fancy Social Media!
             </h1>
             <p className="mb-6 text-lg text-gray-700">
               Please log in or register to see the feed and post.
             </p>
             <div className="flex justify-center space-x-4">
-              <Link
-                href="/login"
-                className="rounded-md bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-              >
+              <Link href="/login" className="rounded-md bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
                 Login
               </Link>
-              <Link
-                href="/register"
-                className="rounded-md bg-green-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
-              >
+              <Link href="/register" className="rounded-md bg-green-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">
                 Register
               </Link>
             </div>
