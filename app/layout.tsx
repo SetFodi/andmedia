@@ -2,7 +2,8 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import SessionProviderWrapper from "@/components/SessionProviderWrapper"; // Import the wrapper
+import SessionProviderWrapper from "@/components/SessionProviderWrapper";
+import { SocketProvider } from "@/context/SocketContext"; // Import SocketProvider
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -19,8 +20,11 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
-        {/* Wrap the children with the SessionProviderWrapper */}
-        <SessionProviderWrapper>{children}</SessionProviderWrapper>
+        {/* SessionProvider should ideally be inside SocketProvider if socket needs session */}
+        {/* Or vice-versa depending on dependencies. Let's try Socket -> Session */}
+        <SocketProvider>
+          <SessionProviderWrapper>{children}</SessionProviderWrapper>
+        </SocketProvider>
       </body>
     </html>
   );

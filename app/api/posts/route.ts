@@ -2,8 +2,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import dbConnect from "@/lib/dbConnect";
-import Post, { IPost, IComment } from "@/models/Post"; // Import IComment
-import User, { IUser } from "@/models/User"; // Import IUser
+import Post, { IPost, IComment } from "@/models/Post";
+import User, { IUser } from "@/models/User";
+// Removed Socket.IO imports as they are no longer used here
 
 const secret = process.env.NEXTAUTH_SECRET;
 
@@ -11,7 +12,7 @@ const secret = process.env.NEXTAUTH_SECRET;
 type PopulatedPostAuthor = Pick<IUser, "username" | "profilePicture">;
 type PopulatedCommentUser = Pick<IUser, "username" | "profilePicture">;
 
-// --- GET Handler: Fetch Posts ---
+// --- GET Handler (Complete) ---
 export async function GET(request: NextRequest) {
   await dbConnect();
 
@@ -26,19 +27,18 @@ export async function GET(request: NextRequest) {
     // Populate 'author' and nested 'comments.user'
     const posts = await Post.find({})
       .populate<{ author: PopulatedPostAuthor }>(
-        "author", // Field to populate
-        "username profilePicture" // Select specific fields from the User model
+        "author",
+        "username profilePicture"
       )
-      // Populate the 'user' field within the 'comments' array
       .populate<{ comments: (IComment & { user: PopulatedCommentUser })[] }>({
-        path: "comments.user", // Path to the nested field to populate
-        select: "username profilePicture", // Fields to select from the referenced User
-        model: User, // Explicitly specify the model to use for population
+        path: "comments.user",
+        select: "username profilePicture",
+        model: User,
       })
-      .sort({ createdAt: -1 }) // Sort by creation date, descending
+      .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .lean(); // Use .lean() for faster read-only operations
+      .lean();
 
     const totalPosts = await Post.countDocuments();
 
@@ -64,23 +64,19 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// --- POST Handler: Create Post (Keep as is) ---
+// --- POST Handler: Create Post (Complete - Emit Removed) ---
 export async function POST(request: NextRequest) {
-  // ... existing POST handler code ...
   await dbConnect();
 
   // 1. Check Authentication
   const token = await getToken({ req: request, secret });
   if (!token || !token.id) {
-    // Log only the failure case now
     console.error("API /api/posts - POST failed: Unauthorized. Token:", token);
     return NextResponse.json(
       { success: false, message: "Unauthorized: User not logged in" },
       { status: 401 }
     );
   }
-
-  // If authentication passed:
   console.log("API /api/posts - User authenticated:", token.id);
 
   try {
@@ -117,15 +113,22 @@ export async function POST(request: NextRequest) {
     await newPost.save();
     console.log(`API /api/posts - Post created by ${authorId}`);
 
-
     // 5. Populate author info for the response
     const populatedPost = await Post.findById(newPost._id)
-      .populate<{ author: Pick<IPost["author"], "username" | "profilePicture"> }>(
+      .populate<{ author: PopulatedPostAuthor }>(
         "author",
         "username profilePicture"
       )
       .lean();
 
+    if (!populatedPost) {
+      // This case is unlikely if save() succeeded, but good practice
+      throw new Error("Failed to retrieve populated post after creation.");
+    }
+
+    // --- Socket Emit Section REMOVED ---
+
+    // Return success response
     return NextResponse.json(
       {
         success: true,
@@ -135,7 +138,9 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     );
   } catch (error: any) {
+    // --- Error Handling (Complete) ---
     console.error(`API /api/posts - Error during post creation by ${token.id}:`, error);
+    // Handle Mongoose validation errors specifically
     if (error.name === "ValidationError") {
       const messages = Object.values(error.errors).map((err: any) => err.message);
       return NextResponse.json(
@@ -143,6 +148,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    // Handle other errors
     return NextResponse.json(
       { success: false, message: "Error creating post" },
       { status: 500 }
