@@ -3,8 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import dbConnect from "@/lib/dbConnect";
 import Post, { IComment } from "@/models/Post";
-import User from "@/models/User"; // Import User model
+import User from "@/models/User"; // Import User model for population
 import mongoose from "mongoose";
+// Removed Socket.IO imports
 
 const secret = process.env.NEXTAUTH_SECRET;
 
@@ -46,7 +47,6 @@ export async function POST(request: NextRequest, context: RouteContext) {
       );
     }
     if (text.length > 500) {
-      // Match schema validation
       return NextResponse.json(
         {
           success: false,
@@ -57,8 +57,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
     }
 
     // 4. Create Comment Subdocument Object
-    const newComment = {
-      user: userId, // Store the user's ObjectId
+    const newCommentObject = { // Renamed to avoid conflict with IComment type
+      user: userId,
       text: text.trim(),
       // createdAt will be added automatically by the subdocument schema
     };
@@ -69,8 +69,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
       {
         $push: {
           comments: {
-            $each: [newComment], // Use $each to add the object
-            $sort: { createdAt: -1 }, // Optional: Keep comments sorted by newest
+            $each: [newCommentObject],
+            $sort: { createdAt: -1 }, // Keep comments sorted by newest
           },
         },
       },
@@ -86,7 +86,11 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     // 6. Find the newly added comment to populate its user for the response
     // The newly added comment should be the first one if sorted by descending createdAt
-    const addedComment = updatedPost.comments[0];
+    // Ensure comments array exists and is not empty
+    if (!updatedPost.comments || updatedPost.comments.length === 0) {
+        throw new Error("Failed to find the added comment in the post document.");
+    }
+    const addedComment = updatedPost.comments[0] as mongoose.Document & IComment; // Cast for population
 
     // Manually populate the user for the single comment response
     await User.populate(addedComment, {
@@ -96,19 +100,20 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     console.log(`Comment API: User ${userId} commented on post ${postId}`);
 
+    // --- Socket Emit Section REMOVED ---
+
     // 7. Return the newly added comment (with populated user)
     return NextResponse.json(
       {
         success: true,
         message: "Comment added successfully",
-        data: addedComment, // Send back just the new comment object
+        data: addedComment.toObject(), // Convert Mongoose doc to plain object
       },
       { status: 201 } // 201 Created
     );
   } catch (error: any) {
     console.error(`Comment API: Error adding comment to post ${postId}:`, error);
     if (error.name === "ValidationError") {
-      // Mongoose validation errors on the comment subdocument
       const messages = Object.values(error.errors).map((err: any) => err.message);
       return NextResponse.json(
         { success: false, message: messages.join(", ") },

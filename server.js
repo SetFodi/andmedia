@@ -38,15 +38,27 @@ function initializeSocketIO(httpServer) {
       }
     });
 
-    // --- ADDED LISTENER FOR NEW POSTS FROM CLIENT ---
+    // Listener for new posts from client
     socket.on("new_post_from_client", (postData) => {
-        // Basic validation of received data
         if (postData && postData._id && postData.author) {
             console.log(`Server received 'new_post_from_client' (ID: ${postData._id}) from ${socket.id}`);
             // Broadcast 'post_created' to all *other* connected clients
             socket.broadcast.emit("post_created", postData);
         } else {
             console.warn(`Server received invalid 'new_post_from_client' data from ${socket.id}:`, postData);
+        }
+    });
+
+    // --- ADDED LISTENER FOR NEW COMMENTS FROM CLIENT ---
+    socket.on("new_comment_from_client", (commentData) => {
+        // commentData should be { postId: string, comment: PopulatedComment }
+        if (commentData && commentData.postId && commentData.comment?._id) {
+            console.log(`Server received 'new_comment_from_client' for post ${commentData.postId} from ${socket.id}`);
+            // Broadcast 'comment_added' to all *other* connected clients
+            // Send the same structure back
+            socket.broadcast.emit("comment_added", commentData);
+        } else {
+            console.warn(`Server received invalid 'new_comment_from_client' data from ${socket.id}:`, commentData);
         }
     });
     // --- END ADDED LISTENER ---

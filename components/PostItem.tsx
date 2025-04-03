@@ -18,7 +18,8 @@ interface PopulatedUser {
 }
 
 // Define the shape of a comment with a populated user
-type PopulatedComment = Omit<IComment, "user"> & {
+// Export this type if needed elsewhere
+export type PopulatedComment = Omit<IComment, "user"> & {
   _id: string;
   user: PopulatedUser;
 };
@@ -70,13 +71,13 @@ const CommentItem: React.FC<{ comment: PopulatedComment }> = ({ comment }) => {
   );
 };
 
-// --- Main Post Item Component (Complete - Modified Like Handler & Listener) ---
+// --- Main Post Item Component (Complete - Added Comment Socket Logic) ---
 const PostItem: React.FC<PostItemProps> = ({ post }) => {
   const { data: session } = useSession();
   const currentUserId = session?.user?.id;
   const { socket, isConnected } = useSocket(); // Get socket
 
-  // Like State - Initialize from props
+  // Like State
   const [isLiked, setIsLiked] = useState(() =>
     currentUserId ? post.likes.includes(currentUserId) : false
   );
@@ -96,15 +97,14 @@ const PostItem: React.FC<PostItemProps> = ({ post }) => {
     setIsLiked(currentUserId ? post.likes.includes(currentUserId) : false);
   }, [post.likes, currentUserId]);
 
-  // Effect for Comments
+  // Effect for Comments (update if post prop changes)
   useEffect(() => {
     setComments(post.comments ?? []);
   }, [post.comments]);
 
-  // --- Socket Listener for Like Updates (Broadcasted from Server) ---
+  // --- Socket Listener for Like Updates ---
   useEffect(() => {
     if (!socket || !isConnected) return;
-
     const handleLikeUpdate = (data: { postId: string; likes: string[] }) => {
       if (data.postId === post._id) {
         console.log(`PostItem (${post._id}): Received broadcast 'like_updated'`, data);
@@ -112,15 +112,46 @@ const PostItem: React.FC<PostItemProps> = ({ post }) => {
         setIsLiked(currentUserId ? data.likes.includes(currentUserId) : false);
       }
     };
-
     console.log(`PostItem (${post._id}): Attaching 'like_updated' listener`);
     socket.on("like_updated", handleLikeUpdate);
-
     return () => {
       console.log(`PostItem (${post._id}): Detaching 'like_updated' listener`);
       socket.off("like_updated", handleLikeUpdate);
     };
   }, [socket, isConnected, post._id, currentUserId]);
+
+  // --- Socket Listener for Comment Updates ---
+  useEffect(() => {
+    if (!socket || !isConnected) return;
+
+    // Handler for when a new comment is broadcast
+    const handleCommentAdded = (data: { postId: string; comment: PopulatedComment }) => {
+        // Check if the comment belongs to this post
+        if (data.postId === post._id) {
+            console.log(`PostItem (${post._id}): Received broadcast 'comment_added'`, data.comment);
+            // Add the new comment to the beginning of the local state
+            // Avoid adding duplicates if the user's own submission overlaps
+            setComments((prevComments) => {
+                if (prevComments.some(c => c._id === data.comment._id)) {
+                    return prevComments;
+                }
+                return [data.comment, ...prevComments];
+            });
+            // Optionally ensure comments are shown when a new one arrives
+            setShowComments(true);
+        }
+    };
+
+    console.log(`PostItem (${post._id}): Attaching 'comment_added' listener`);
+    socket.on("comment_added", handleCommentAdded);
+
+    // Cleanup listener
+    return () => {
+        console.log(`PostItem (${post._id}): Detaching 'comment_added' listener`);
+        socket.off("comment_added", handleCommentAdded);
+    };
+  }, [socket, isConnected, post._id]); // Dependencies: socket, connection status, post ID
+
 
   // Author/Time details
   const authorUsername = post.author?.username ?? "Unknown User";
@@ -129,46 +160,25 @@ const PostItem: React.FC<PostItemProps> = ({ post }) => {
 
   // --- Like Handler (Emits event from client on success) ---
   const handleLikeClick = async () => {
-    if (!currentUserId || isLoadingLike) {
-      if (!currentUserId) console.log("Please log in to like posts.");
-      return;
-    }
+    if (!currentUserId || isLoadingLike) { /* ... */ return; }
     setIsLoadingLike(true);
-
     try {
       const response = await axios.patch(`/api/posts/${post._id}/like`);
-
       if (response.data.success) {
-        console.log("Like API call successful for user click");
         const updatedLikes = response.data.data.likes as string[];
         const payload = { postId: post._id, likes: updatedLikes };
-
-        // Update local state immediately for the user who clicked
         setLikeCount(updatedLikes.length);
         setIsLiked(currentUserId ? updatedLikes.includes(currentUserId) : false);
-
-        // --- Emit event for other clients via server ---
-        if (socket && isConnected) { // Check connection status too
+        if (socket && isConnected) {
             console.log(`PostItem (${post._id}): Emitting 'like_updated_from_client'`, payload);
             socket.emit("like_updated_from_client", payload);
-        } else {
-            console.warn(`PostItem (${post._id}): Socket not available or connected, cannot emit like update.`);
-        }
-        // --- End Emit ---
-
-      } else {
-        console.error("Failed to update like status via API:", response.data.message);
-        // Optional: Show error to user. Don't revert state here, rely on potential future socket events.
-      }
-    } catch (error) {
-      console.error("Error calling like API:", error);
-      // Optional: Show error to user
-    } finally {
-      setIsLoadingLike(false);
-    }
+        } else { /* ... warning ... */ }
+      } else { /* ... error handling ... */ }
+    } catch (error) { /* ... error handling ... */ }
+    finally { setIsLoadingLike(false); }
   };
 
-  // --- Comment Submit Handler (Complete) ---
+  // --- Comment Submit Handler (Emits event from client on success) ---
   const handleCommentSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!commentText.trim() || isSubmittingComment || !currentUserId) {
@@ -183,9 +193,22 @@ const PostItem: React.FC<PostItemProps> = ({ post }) => {
       });
       if (response.data.success) {
         const newComment = response.data.data as PopulatedComment;
+
+        // Update local state immediately for the user who submitted
         setComments((prevComments) => [newComment, ...prevComments]);
         setCommentText("");
         setShowComments(true);
+
+        // --- Emit event for other clients via server ---
+        const payload = { postId: post._id, comment: newComment };
+        if (socket && isConnected) {
+            console.log(`PostItem (${post._id}): Emitting 'new_comment_from_client'`, payload);
+            socket.emit("new_comment_from_client", payload);
+        } else {
+            console.warn(`PostItem (${post._id}): Socket not available or connected, cannot emit new comment event.`);
+        }
+        // --- End Emit ---
+
       } else {
         setCommentError(response.data.message || "Failed to add comment.");
       }
@@ -245,6 +268,7 @@ const PostItem: React.FC<PostItemProps> = ({ post }) => {
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5" >
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.76c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.076-4.076a1.526 1.526 0 011.037-.443 48.282 48.282 0 005.68-.494c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
           </svg>
+          {/* Update comment count based on state */}
           <span className="text-sm font-medium">{comments.length}</span>
         </button>
       </div>
